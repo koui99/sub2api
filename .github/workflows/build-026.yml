@@ -1,0 +1,75 @@
+name: Build 0.2.6 Image
+
+# 手动触发，避免依赖 tag push
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to embed (e.g. 0.2.6)'
+        required: true
+        default: '0.2.6'
+        type: string
+      push_to_ghcr:
+        description: 'Push image to GHCR'
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (no submodules, no LFS)
+        uses: actions/checkout@v4
+
+      - name: Show what we are building
+        run: |
+          echo "commit: $(git rev-parse HEAD)"
+          echo "version input: ${{ github.event.inputs.version }}"
+          echo "VERSION file: $(cat backend/cmd/server/VERSION 2>/dev/null || echo '<missing>')"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: ${{ github.event.inputs.push_to_ghcr == 'true' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute lowercase image name
+        id: meta
+        run: |
+          OWNER=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')
+          REPO=$(echo '${{ github.event.repository.name }}' | tr '[:upper:]' '[:lower:]')
+          echo "image=ghcr.io/${OWNER}/${REPO}" >> "$GITHUB_OUTPUT"
+          echo "Image will be: ghcr.io/${OWNER}/${REPO}:${{ github.event.inputs.version }}"
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: ${{ github.event.inputs.push_to_ghcr == 'true' }}
+          tags: |
+            ${{ steps.meta.outputs.image }}:${{ github.event.inputs.version }}
+            ${{ steps.meta.outputs.image }}:latest
+          build-args: |
+            VERSION=${{ github.event.inputs.version }}
+            COMMIT=${{ github.sha }}
+            NPM_CONFIG_REGISTRY=https://registry.npmmirror.com
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Print result
+        if: ${{ github.event.inputs.push_to_ghcr == 'true' }}
+        run: |
+          echo "Pushed: ${{ steps.meta.outputs.image }}:${{ github.event.inputs.version }}"
+          echo "Pushed: ${{ steps.meta.outputs.image }}:latest"
